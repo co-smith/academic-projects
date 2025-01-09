@@ -1,0 +1,342 @@
+---
+title: "Final 525"
+author: "Corey Smith"
+date: "`r Sys.Date()`"
+output: 
+  pdf_document:
+    extra_dependencies: ["bm"]
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# Loading Data
+```{r}
+gw_data <- read.csv("C:/Users/corey/Downloads/merged_gw (1).csv")
+```
+
+## Building predictor variables
+### xPPG
+```{r}
+gw_data$minutes[gw_data$minutes == 0] <- NA
+avg_xp <- aggregate(xP ~ element, data = gw_data, FUN = function(x) mean(x, na.rm = TRUE))
+merged_data <- merge(gw_data, avg_xp, by = "element")
+
+head(merged_data[order(merged_data$xP.y, decreasing = TRUE), ])
+```
+
+```{r}
+#checking if estimate is reasonable
+haaland <- merged_data[merged_data$element == 318, ]
+print(haaland)
+```
+### AVG PPG
+```{r}
+avg_ppg <- aggregate(total_points ~ element, data = gw_data, FUN = function(x) mean(x, na.rm = TRUE))
+merged_data <- merge(merged_data, avg_ppg, by = "element")
+```
+
+```{r}
+names(merged_data)[names(merged_data) == "xP.x"] <- "xP"
+names(merged_data)[names(merged_data) == "xP.y"] <- "xPPG"
+names(merged_data)[names(merged_data) == "total_points.x"] <- "total_points"
+names(merged_data)[names(merged_data) == "total_points.y"] <- "PPG"
+```
+
+### CUM ICT
+```{r}
+cum_sum <- function(data, group_var, sum_var) {
+  unique_groups <- unique(data[[group_var]])
+  cumsum_values <- vector("numeric", nrow(data))
+ 
+  for (g in unique_groups) {
+    group_indices <- which(data[[group_var]] == g)
+    cumsum_values[group_indices] <- cumsum(data[group_indices, sum_var])
+  }
+  return (cumsum_values)
+}
+cumulative_ict <- cum_sum(merged_data, "element", "ict_index")
+merged_data <- cbind(merged_data, cumulative_ict)
+```
+
+### ROI
+```{r}
+calculate_roi <- function(merged_data) {
+  unique_elements <- unique(merged_data$element) 
+  unique_gws <- unique(merged_data$GW)
+  
+  roi_results <- data.frame(element = character(), GW = integer(), roi = numeric(), stringsAsFactors = FALSE) 
+  
+  for (i in seq_along(unique_elements)) {
+    element <- unique_elements[i]
+    subset_data_element <- merged_data[merged_data$element == element, ] 
+    
+    for (j in seq_along(unique_gws)) {
+      gw <- unique_gws[j]
+      subset_data_gw <- subset_data_element[subset_data_element$GW == gw, ] 
+      
+      points <- subset_data_gw$total_points
+      cost <- subset_data_gw$value
+      
+      numerator <- sum(points)
+      denominator <- sum(cost) / length(points)
+      
+      roi <- numerator / denominator
+      
+      roi_results <- rbind(roi_results, data.frame(element = element, GW = gw, roi = roi))
+    }
+  }
+  
+  return(roi_results)
+}
+
+roi_df <- calculate_roi(merged_data)
+
+merged_data <- merge(merged_data, roi_df, by = c("GW", "element"))
+```
+
+### FORM CALCULATION
+```{r}
+calculate_form <- function(merged_data, window) {
+  unique_elements <- unique(merged_data$element)
+  unique_gws <- unique(merged_data$GW)
+  
+  form_results <- data.frame(element = character(), GW = integer(), form = numeric(), stringsAsFactors = FALSE)
+  
+  for (i in seq_along(unique_elements)) {
+    element <- unique_elements[i]
+    subset_data_element <- merged_data[merged_data$element == element, ]
+    
+    for (j in seq_along(unique_gws)) {
+      gw <- unique_gws[j]
+      
+      start_index <- max(1, j - window + 1)
+      end_index <- j
+      
+      subset_data_window <- subset_data_element[subset_data_element$GW %in% unique_gws[start_index:end_index], ]
+      
+      points_window <- subset_data_window$total_points
+      
+      form <- sum(points_window) / window
+      
+      form_results <- rbind(form_results, data.frame(element = element, GW = gw, form = form))
+    }
+  }
+  
+  return(form_results)
+}
+
+window_size <- 3
+form_df <- calculate_form(merged_data, window_size)
+
+merged_data <- merge(merged_data, form_df, by = c("GW", "element"))
+```
+
+## BUILDING MODEL
+```{r}
+library(dplyr)
+model <- lm(roi~ xPPG + cumulative_ict + form, data=merged_data)
+summary(model)
+```
+## REQUIRED GRAPHS AS OUTLINED IN DOCUMENT
+```{r}
+## NEED TO CHANGE THIS
+residuals <- residuals(model)
+
+hist(residuals, breaks = 30, col = "lightblue", border = "black",
+     main = "Histogram of Residuals",
+     xlab = "Residuals",
+     ylab = "Frequency")
+```
+
+```{r}
+mean_roi <- mean(merged_data$roi)
+median_roi <- median(merged_data$roi)
+mean_xPPG <- mean(merged_data$xPPG)
+median_xPPG <- median(merged_data$xPPG)
+mean_cumulative_ict <- mean(merged_data$cumulative_ict)
+median_cumulative_ict <- median(merged_data$cumulative_ict)
+mean_form_x <- mean(merged_data$form)
+median_form_x <- median(merged_data$form)
+
+sd_roi <- sd(merged_data$roi)
+q1_roi <- quantile(merged_data$roi, 0.25)
+q3_roi <- quantile(merged_data$roi, 0.75)
+iqr_roi <- IQR(merged_data$roi)
+range_roi <- range(merged_data$roi)
+
+sd_xPPG <- sd(merged_data$xPPG)
+q1_xPPG <- quantile(merged_data$xPPG, 0.25)
+q3_xPPG <- quantile(merged_data$xPPG, 0.75)
+iqr_xPPG <- IQR(merged_data$xPPG)
+range_xPPG <- range(merged_data$xPPG)
+
+sd_cumulative_ict <- sd(merged_data$cumulative_ict)
+q1_cumulative_ict <- quantile(merged_data$cumulative_ict, 0.25)
+q3_cumulative_ict <- quantile(merged_data$cumulative_ict, 0.75)
+iqr_cumulative_ict <- IQR(merged_data$cumulative_ict)
+range_cumulative_ict <- range(merged_data$cumulative_ict)
+
+sd_form_x <- sd(merged_data$form)
+q1_form_x <- quantile(merged_data$form, 0.25)
+q3_form_x <- quantile(merged_data$form, 0.75)
+iqr_form_x <- IQR(merged_data$form)
+range_form_x <- range(merged_data$form)
+
+cat("Measures of Central Tendency and Spread for Roi:\n")
+cat("Mean:", mean_roi, "\n")
+cat("Median:", median_roi, "\n")
+cat("Standard Deviation:", sd_roi, "\n")
+cat("1st Quartile:", q1_roi, "\n")
+cat("3rd Quartile:", q3_roi, "\n")
+cat("Interquartile Range:", iqr_roi, "\n")
+cat("Range:", range_roi, "\n\n")
+
+cat("Measures of Central Tendency and Spread for xPPG:\n")
+cat("Mean:", mean_xPPG, "\n")
+cat("Median:", median_xPPG, "\n")
+cat("Standard Deviation:", sd_xPPG, "\n")
+cat("1st Quartile:", q1_xPPG, "\n")
+cat("3rd Quartile:", q3_xPPG, "\n")
+cat("Interquartile Range:", iqr_xPPG, "\n")
+cat("Range:", range_xPPG, "\n\n")
+
+cat("Measures of Central Tendency and Spread for Cumulative ICT:\n")
+cat("Mean:", mean_cumulative_ict, "\n")
+cat("Median:", median_cumulative_ict, "\n")
+cat("Standard Deviation:", sd_cumulative_ict, "\n")
+cat("1st Quartile:", q1_cumulative_ict, "\n")
+cat("3rd Quartile:", q3_cumulative_ict, "\n")
+cat("Interquartile Range:", iqr_cumulative_ict, "\n")
+cat("Range:", range_cumulative_ict, "\n\n")
+
+cat("Measures of Central Tendency and Spread for Form:\n")
+cat("Mean:", mean_form_x, "\n")
+cat("Median:", median_form_x, "\n")
+cat("Standard Deviation:", sd_form_x, "\n")
+cat("1st Quartile:", q1_form_x, "\n")
+cat("3rd Quartile:", q3_form_x, "\n")
+cat("Interquartile Range:", iqr_form_x, "\n")
+cat("Range:", range_form_x, "\n")
+```
+
+```{r}
+pairs(merged_data[, c("roi", "xPPG", "cumulative_ict", "form")])
+```
+
+```{r}
+residuals <- residuals(model)
+hist(residuals, main = "Histogram of Residuals", xlab = "Residuals")
+boxplot(residuals, main = "Boxplot of Residuals")
+qqnorm(residuals, main = "Q-Q Plot of Residuals")
+qqline(residuals)
+```
+
+Normally Distibuted, Violation of constant variance? qqplot looks funky
+
+
+```{r}
+predicted_values <- predict(model)
+residuals <- residuals(model)
+
+plot(predicted_values, residuals,
+     xlab = "Predicted Values",
+     ylab = "Residuals",
+     main = "Residuals vs. Predicted Values Plot")
+abline(h = 0, col = "red")
+```
+
+```{r}
+coefficients <- summary(model)$coefficients[, "Estimate"]
+standard_errors <- summary(model)$coefficients[, "Std. Error"]
+t_values <- summary(model)$coefficients[, "t value"]
+p_values <- summary(model)$coefficients[, "Pr(>|t|)"]
+
+results <- data.frame(
+  Variable = rownames(summary(model)$coefficients),
+  Coefficient = coefficients,
+  Standard_Error = standard_errors,
+  t_value = t_values,
+  p_value = p_values
+)
+
+print(results)
+```
+
+```{r}
+rsquared <- summary(model)$r.squared
+adj_rsquared <- summary(model)$adj.r.squared
+rse <- summary(model)$sigma
+
+cat("R-squared:", rsquared, "\n")
+cat("Adjusted R-squared:", adj_rsquared, "\n")
+cat("Root Mean Square Error (RMSE):", rse, "\n")
+
+```
+
+# Making Predictions
+## Prediciton Functions
+```{r}
+create_team <- function(gameweek) {
+  gameweek_data <- merged_data %>% 
+    filter(GW == gameweek)
+  
+  gameweek_data$predicted_roi <- predict(model, newdata = gameweek_data)
+  
+  filtered_data <- gameweek_data %>% 
+    filter(position %in% c("GK", "DEF", "MID", "FWD"))
+  
+  sorted_data <- filtered_data %>% 
+    arrange(desc(predicted_roi))
+  
+  total_cost <- 0
+  selected_players <- list(GK = character(0), DEF = character(0), MID = character(0), FWD = character(0))
+  positions <- c("GK", "DEF", "MID", "FWD")
+  limits <- c(2, 5, 5, 3)
+  
+  for (j in 1:length(positions)) {
+    position <- positions[j]
+    limit <- limits[j]
+    
+    for (i in 1:nrow(sorted_data)) {
+      player <- sorted_data[i, ]
+      if (player$position != position) {
+        next
+      }
+      
+      cost <- player$value
+      if ((total_cost + cost > 1000) || (length(selected_players[[position]]) >= limit)) {
+        next
+      }
+      
+      selected_players[[position]] <- c(selected_players[[position]], player$name)
+      total_cost <- total_cost + cost
+      
+      if (sum(sapply(selected_players, length)) == 15) {
+        break
+      }
+    }
+  }
+  
+  cat("Selected Goalkeepers:\n", selected_players$GK, "\n")
+  cat("Selected Defenders:\n", selected_players$DEF, "\n")
+  cat("Selected Midfielders:\n", selected_players$MID, "\n")
+  cat("Selected Forwards:\n", selected_players$FWD, "\n")
+  cat("Total Cost:\n", total_cost, "\n")
+
+}
+
+```
+
+```{r}
+##Update to select team with Max ROI
+create_team(gameweek = 30)
+
+```
+
+```{r}
+read.csv()
+```
+
+
